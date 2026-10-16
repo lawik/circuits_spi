@@ -39,24 +39,32 @@ static void spi_dtor(ErlNifEnv *env, void *obj)
     }
 }
 
-static int spi_load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM info)
+static int spi_init(ErlNifEnv *env, void **priv_data, ErlNifResourceFlags flags)
 {
 #ifdef DEBUG
 #ifdef LOG_PATH
     log_location = fopen(LOG_PATH, "w");
 #endif
 #endif
-    debug("spi_load");
-
     struct SpiNifPriv *priv = enif_alloc(sizeof(struct SpiNifPriv));
     if (!priv) {
         error("Can't allocate spi priv");
         return 1;
     }
 
-    priv->spi_nif_res_type = enif_open_resource_type(env, NULL, "spi_nif_res_type", spi_dtor, ERL_NIF_RT_CREATE, NULL);
+    priv->spi_nif_res_type = enif_open_resource_type(env, NULL, "spi_nif_res_type", spi_dtor, flags, NULL);
     if (priv->spi_nif_res_type == NULL) {
         error("open SPI NIF resource type failed");
+        enif_free(priv);
+        return 1;
+    }
+
+    // Marker for the layout of struct SpiNifRes. It's never allocated. On
+    // upgrade, TAKEOVER-only succeeds only if the old library registered the
+    // same ABI. Bump the number when struct SpiNifRes changes.
+    if (enif_open_resource_type(env, NULL, "spi_nif_abi_1", NULL, flags, NULL) == NULL) {
+        error("Previous library has a different ABI. Not upgrading.");
+        enif_free(priv);
         return 1;
     }
 
@@ -73,6 +81,21 @@ static int spi_load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM info)
 
     *priv_data = priv;
     return 0;
+}
+
+static int spi_load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM info)
+{
+    debug("spi_load");
+    return spi_init(env, priv_data, ERL_NIF_RT_CREATE);
+}
+
+// Hot code upgrade: take over the resource type so handles opened by the old
+// library keep working. Refused if the old library has a different ABI. The
+// old library frees its own priv data.
+static int spi_upgrade(ErlNifEnv *env, void **priv_data, void **old_priv_data, ERL_NIF_TERM info)
+{
+    debug("spi_upgrade");
+    return spi_init(env, priv_data, ERL_NIF_RT_TAKEOVER);
 }
 
 static void spi_unload(ErlNifEnv *env, void *priv_data)
@@ -327,4 +350,4 @@ static ErlNifFunc nif_funcs[] =
     {"max_transfer_size", 0, spi_max_transfer_size, ERL_NIF_DIRTY_JOB_IO_BOUND}
 };
 
-ERL_NIF_INIT(Elixir.Circuits.SPI.Nif, nif_funcs, spi_load, NULL, NULL, spi_unload)
+ERL_NIF_INIT(Elixir.Circuits.SPI.Nif, nif_funcs, spi_load, NULL, spi_upgrade, spi_unload)
