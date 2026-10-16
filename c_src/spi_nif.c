@@ -12,10 +12,13 @@ struct SpiNifPriv {
 };
 
 // SPI NIF Resource.
+// Bump SPI_NIF_ABI if this or struct SpiConfig changes. Hot code upgrades
+// across ABIs are refused.
 struct SpiNifRes {
     int fd;
     struct SpiConfig config;
 };
+#define SPI_NIF_ABI "spi_nif_abi_1"
 
 static ERL_NIF_TERM atom_ok;
 static ERL_NIF_TERM atom_error;
@@ -59,10 +62,8 @@ static int spi_init(ErlNifEnv *env, void **priv_data, ErlNifResourceFlags flags)
         return 1;
     }
 
-    // Marker for the layout of struct SpiNifRes. It's never allocated. On
-    // upgrade, TAKEOVER-only succeeds only if the old library registered the
-    // same ABI. Bump the number when struct SpiNifRes changes.
-    if (enif_open_resource_type(env, NULL, "spi_nif_abi_1", NULL, flags, NULL) == NULL) {
+    // Never allocated. Only marks the ABI so that upgrades can check it.
+    if (enif_open_resource_type(env, NULL, SPI_NIF_ABI, NULL, flags, NULL) == NULL) {
         error("Previous library has a different ABI. Not upgrading.");
         enif_free(priv);
         return 1;
@@ -89,12 +90,11 @@ static int spi_load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM info)
     return spi_init(env, priv_data, ERL_NIF_RT_CREATE);
 }
 
-// Hot code upgrade: take over the resource type so handles opened by the old
-// library keep working. Refused if the old library has a different ABI. The
-// old library frees its own priv data.
 static int spi_upgrade(ErlNifEnv *env, void **priv_data, void **old_priv_data, ERL_NIF_TERM info)
 {
     debug("spi_upgrade");
+
+    // Take over the old library's resources. Fails if its ABI is different.
     return spi_init(env, priv_data, ERL_NIF_RT_TAKEOVER);
 }
 
